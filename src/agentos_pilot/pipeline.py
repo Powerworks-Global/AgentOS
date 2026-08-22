@@ -18,6 +18,8 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     HookMatcher,
+    ProcessError,
+    ResultError,
     ResultMessage,
     TextBlock,
     ToolResultBlock,
@@ -120,19 +122,39 @@ async def run_pipeline(config: PilotConfig) -> int:
     print(f"[pilot] audit log -> {config.audit_log}")
     print("[pilot] starting run\n")
 
-    exit_code = 0
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    print(block.text)
-                elif isinstance(block, ToolUseBlock):
-                    print(f"[tool call] {block.name} {block.input}")
-                elif isinstance(block, ToolResultBlock):
-                    print(f"[tool result] {block.content}")
-        elif isinstance(message, ResultMessage):
-            print(f"\n[pilot] run finished: {message.subtype}")
-            if message.is_error:
-                exit_code = 1
+    # exit_code starts at 1 (failed) and is only cleared to 0 once we see a
+    # ResultMessage that both reports success AND wasn't preceded by an
+    # AssistantMessage-level error. A real VM run showed why this matters:
+    # an invalid API key surfaced as an AssistantMessage with
+    # error="authentication_failed" (only reachable via message.error, not
+    # its content blocks), and the SDK still emitted a final ResultMessage
+    # with subtype "success" and is_error unset - a naive
+    # "started at 0, flip to 1 on is_error" check silently reported total
+    # failure as success. Default-failed and require explicit success is the
+    # safer posture for something meant to run unattended.
+    exit_code = 1
+    saw_assistant_error = False
+    try:
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                if message.error:
+                    saw_assistant_error = True
+                    print(f"[pilot] assistant-level error: {message.error}")
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        print(block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        print(f"[tool call] {block.name} {block.input}")
+                    elif isinstance(block, ToolResultBlock):
+                        print(f"[tool result] {block.content}")
+            elif isinstance(message, ResultMessage):
+                print(f"\n[pilot] run finished: {message.subtype}")
+                if message.is_error or saw_assistant_error or message.subtype != "success":
+                    exit_code = 1
+                else:
+                    exit_code = 0
+    except (ProcessError, ResultError) as e:
+        print(f"[pilot] SDK/CLI process failure: {e}")
+        exit_code = 1
 
     return exit_code
