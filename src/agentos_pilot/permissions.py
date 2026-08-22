@@ -27,19 +27,21 @@ from claude_agent_sdk import (
 SAFE_READ_TOOLS = {"Read", "Glob", "Grep", "TodoWrite"}
 REPO_WRITE_TOOLS = {"Edit", "Write"}
 
-# Matched against the full command string with re.match (i.e. anchored at
-# the start). Order doesn't matter — deny patterns are checked first and
-# win regardless of position.
+# Matched anywhere in the command via re.search (not anchored), after
+# heredoc/quoted content is stripped out (see _strip_literal_text). Order
+# doesn't matter — deny patterns are checked first and win regardless of
+# position.
 ALLOWED_BASH_PATTERNS = [
     r"git status\b",
     r"git diff\b",
     r"git log\b",
     r"git branch\b",
+    r"git remote(\s+-v)?\b",
     r"git checkout -b [\w./-]+$",
     r"git add\b",
     r"git commit\b",
     r"git push(?!.*(--force|-f\b))",
-    r"(pytest|python -m pytest)\b",
+    r"(pytest|python3? -m pytest)\b",
     r"npm (test|run test)\b",
     r"gh pr create\b",
     r"gh auth status\b",

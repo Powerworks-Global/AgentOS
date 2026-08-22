@@ -29,7 +29,10 @@ def _run(coro):
         "git add -A",
         "git commit -m 'x'",
         "git push origin pilot/123",
+        "git remote -v",
+        "git remote",
         "pytest -q",
+        "python3 -m pytest -v",
         "gh pr create --title x --body y",
     ],
 )
