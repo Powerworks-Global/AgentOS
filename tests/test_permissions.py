@@ -1,10 +1,11 @@
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
-from agentos_pilot.permissions import make_can_use_tool
+from agentos_pilot.permissions import make_can_use_tool, make_pre_tool_use_hook
 
 
 @pytest.fixture
@@ -57,6 +58,30 @@ def test_denies_destructive_commands(can_use_tool, command):
     assert isinstance(result, PermissionResultDeny)
 
 
+def test_ignores_allowlisted_and_denied_text_inside_heredoc_body(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    audit_log = tmp_path / "audit" / "decisions.jsonl"
+    fn = make_can_use_tool(repo_root, audit_log)
+
+    # The command actually run is `gh pr create`; the heredoc body mentions
+    # both an allow-listed phrase ("npm test") and a denied one ("sudo rm -rf")
+    # that must not affect the decision or its logged reason.
+    command = (
+        "gh pr create --title x --body \"$(cat <<'EOF'\n"
+        "Ran npm test locally; do not run sudo rm -rf, that was just an example.\n"
+        "EOF\n"
+        ")\""
+    )
+    result = _run(fn("Bash", {"command": command}, None))
+    assert isinstance(result, PermissionResultAllow)
+
+    logged = json.loads(audit_log.read_text().strip().splitlines()[-1])
+    assert "gh pr create" in logged["reason"]
+    assert "npm" not in logged["reason"]
+    assert "sudo" not in logged["reason"]
+
+
 def test_denies_unknown_bash_command(can_use_tool):
     fn, _ = can_use_tool
     result = _run(fn("Bash", {"command": "some-random-tool --do-thing"}, None))
@@ -88,3 +113,33 @@ def test_denies_unknown_tool(can_use_tool):
     fn, _ = can_use_tool
     result = _run(fn("WebFetch", {"url": "http://example.com"}, None))
     assert isinstance(result, PermissionResultDeny)
+
+
+def test_pre_tool_use_hook_denies_destructive_bash(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    audit_log = tmp_path / "audit" / "decisions.jsonl"
+    hook = make_pre_tool_use_hook(repo_root, audit_log)
+
+    result = _run(
+        hook({"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}, "tool-1", None)
+    )
+    output = result["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    assert output["hookEventName"] == "PreToolUse"
+
+    logged = json.loads(audit_log.read_text().strip())
+    assert logged["decision"] == "deny"
+    assert logged["tool"] == "Bash"
+
+
+def test_pre_tool_use_hook_allows_safe_bash(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    audit_log = tmp_path / "audit" / "decisions.jsonl"
+    hook = make_pre_tool_use_hook(repo_root, audit_log)
+
+    result = _run(
+        hook({"tool_name": "Bash", "tool_input": {"command": "git status"}}, "tool-1", None)
+    )
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"

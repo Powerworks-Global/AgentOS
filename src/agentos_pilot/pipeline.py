@@ -17,6 +17,7 @@ from pathlib import Path
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    HookMatcher,
     ResultMessage,
     TextBlock,
     ToolResultBlock,
@@ -24,7 +25,7 @@ from claude_agent_sdk import (
     query,
 )
 
-from agentos_pilot.permissions import make_can_use_tool
+from agentos_pilot.permissions import make_can_use_tool, make_pre_tool_use_hook
 
 
 class PilotError(RuntimeError):
@@ -91,11 +92,28 @@ async def run_pipeline(config: PilotConfig) -> int:
     branch_name = f"{config.branch_prefix}{int(asyncio.get_event_loop().time())}"
     prompt = _build_prompt(config.task, branch_name)
 
+    # Deliberately no `allowed_tools` here: naming a tool there auto-approves every
+    # call to it before can_use_tool is ever consulted (the SDK warns about this
+    # directly as CanUseToolShadowedWarning). A real pilot run demonstrated the
+    # gap concretely - only 3 of the run's ~15 Bash calls actually reached the
+    # policy below, because an early `allowed_tools=[...]` list shadowed the rest.
+    #
+    # can_use_tool alone isn't enough either: a follow-up test showed the CLI's
+    # own bwrap sandbox executes most Bash calls directly and only consults
+    # can_use_tool when a call needs to escape that sandbox - so a destructive
+    # command the sandbox is willing to run locally would never reach it. The
+    # PreToolUse hook fires before that sandboxing decision and is the actual
+    # enforcement point (verified: a bare `rm -f` in the target repo was
+    # correctly denied by it). can_use_tool is kept anyway as defense-in-depth.
     options = ClaudeAgentOptions(
         cwd=str(config.repo_root),
         can_use_tool=make_can_use_tool(config.repo_root, config.audit_log),
+        hooks={
+            "PreToolUse": [
+                HookMatcher(hooks=[make_pre_tool_use_hook(config.repo_root, config.audit_log)])
+            ]
+        },
         permission_mode="default",
-        allowed_tools=["Read", "Glob", "Grep", "Edit", "Write", "Bash", "TodoWrite"],
     )
 
     print(f"[pilot] repo={config.repo_root} branch={branch_name}")
