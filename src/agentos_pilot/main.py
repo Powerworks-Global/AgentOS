@@ -15,22 +15,12 @@ import os
 import sys
 from pathlib import Path
 
+from agentos_pilot.env import load_dotenv
 from agentos_pilot.pipeline import PilotConfig, PilotError, run_pipeline
 
 
-def _load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
-
-
 def main() -> int:
-    _load_dotenv(Path(".env"))
+    load_dotenv(Path(".env"))
 
     if len(sys.argv) < 2:
         print("usage: python -m agentos_pilot.main <task description>", file=sys.stderr)
