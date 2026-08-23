@@ -1,0 +1,14 @@
+# Fires agentos-worker.service on a fixed interval. Pick an interval that
+# matches how fast the inbox actually fills, not an arbitrary default -
+# 15 minutes here is a starting point, not a recommendation.
+
+[Unit]
+Description=Run the AgentOS pilot inbox worker periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Unit=agentos-worker.service
+
+[Install]
+WantedBy=timers.target

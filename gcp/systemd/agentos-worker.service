@@ -1,0 +1,37 @@
+# One-shot unit: claims and runs at most one inbox task, then exits.
+# Triggered on a schedule by agentos-worker.timer, not run directly.
+#
+# Not installed automatically by startup-script.sh - copy both files to
+# /etc/systemd/system/ on agentos-vm, then:
+#   systemctl daemon-reload
+#   systemctl enable --now agentos-worker.timer
+# This is a deliberate manual step, not wired into VM provisioning, so
+# unattended scheduled runs only start when someone actually decides to
+# turn them on.
+
+[Unit]
+Description=AgentOS pilot inbox worker (claims and runs one task)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root, matching how startup-script.sh already deploys/owns
+# /opt/agentos and /etc/agentos - no dedicated "agentos" user exists yet.
+# Per-profile least-privilege (a non-root service account per agent
+# profile) is the multi-profile phase already flagged as not-yet-done in
+# README.md; introducing a partial version of it just for this unit would
+# break on first use without the matching user/ownership setup, so it's
+# deferred rather than half-done here.
+WorkingDirectory=/opt/agentos/pilot
+EnvironmentFile=/etc/agentos/env
+# PILOT_REPO_ROOT / PILOT_INBOX_DIR / PILOT_AUDIT_LOG / PILOT_METRICS_LOG
+# are expected to already be set in /etc/agentos/env alongside the secrets
+# the startup script writes there - add them there before enabling this,
+# they are not set here.
+ExecStart=/opt/agentos/pilot/.venv/bin/python -m agentos_pilot.worker
+
+# No auto-restart on failure - a failed task is recorded in inbox/failed/
+# with its reason; retrying it automatically would hide that from review
+# rather than surface it.
+Restart=no

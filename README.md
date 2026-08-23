@@ -63,9 +63,30 @@ double-process a task. A task without its own `--repo` falls back to
 `inbox/failed/<id>.json` with the exit code (and error, if any) recorded
 alongside it.
 
-**Not wired yet**: an actual cron entry or Cloud Scheduler job calling
-`worker` on a schedule. That's a separate, later infra step — this is the
-queue and the consumer, not the trigger itself.
+**Not wired yet on the live VM**: `gcp/systemd/agentos-worker.{service,timer}`
+are drafted (a oneshot unit running `worker` once, fired every 15 minutes by
+a timer) but **not installed by `startup-script.sh`** — enabling them is a
+manual, deliberate step (`systemctl enable --now agentos-worker.timer` after
+copying both files to `/etc/systemd/system/` on `agentos-vm`), not something
+that happens automatically on provisioning. Once enabled, this is what
+actually turns "the worker can run a task" into "the worker runs
+unattended, on a schedule, spending real API cost and opening real PRs
+without a human kicking it off each time" — worth doing deliberately, not
+as a side effect of a VM rebuild.
+
+## Cost/success baseline
+
+```bash
+.venv/bin/python -m agentos_pilot.report
+```
+
+Every completed run (via `main` or `worker`) appends a cost/outcome record
+to `PILOT_METRICS_LOG` (`./audit/runs.jsonl` by default) — cost, token
+usage, turns, permission-denial count, success/failure, whichever model(s)
+actually served the run. `report` summarizes it: success rate, total and
+average cost, average turns. This is the baseline the token-engineering
+brief calls for — a real number to compare a future Gemini/Haiku-routed run
+against, instead of an impression that it's cheaper.
 
 ## Test
 
@@ -76,15 +97,16 @@ queue and the consumer, not the trigger itself.
 
 Tests cover the permission policy (`tests/test_permissions.py` — the one
 piece where a logic bug would actually be dangerous, e.g. an over-broad
-allow regex letting a destructive command through) and the inbox/worker
-queue logic (`tests/test_tasks.py`, `tests/test_worker.py` — claim/finish
+allow regex letting a destructive command through), the inbox/worker queue
+logic (`tests/test_tasks.py`, `tests/test_worker.py` — claim/finish
 semantics, tested against a real filesystem with the actual Claude Agent
-SDK call mocked out).
+SDK call mocked out), and the metrics/report path (`tests/test_metrics.py`,
+`tests/test_report.py`).
 
 ## What this pilot deliberately does not do yet
 
-- No scheduler wired to `worker` — cron/Cloud Scheduler invocation is a
-  later infra step; today it's run by hand.
+- Scheduled `worker` runs are drafted (`gcp/systemd/`) but not enabled on
+  the live VM — see the Inbox section above.
 - No Discord integration (phase 3 in the design note) — a denied tool call
   is final for the run, not escalated to a human for approval.
 - No multi-profile/service-account separation — single policy, single repo
@@ -92,6 +114,9 @@ SDK call mocked out).
   `PILOT_REPO_ROOT` via `inbox add --repo`).
 - No parallel subagent fan-out (phase 4) — `worker` claims and runs one
   task at a time, sequentially.
+- No model routing yet — every run uses whatever the `claude` CLI is
+  configured for. That's the next real step once the baseline above has a
+  few real data points in it.
 
 Those are the next phases once this one is proven out. GCP deployment
 (phase 2) is done separately — see `gcp/startup-script.sh` and the AgentOS

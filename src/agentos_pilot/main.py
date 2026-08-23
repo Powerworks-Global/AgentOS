@@ -36,6 +36,7 @@ def main() -> int:
         repo_root=Path(repo_root),
         branch_prefix=os.environ.get("PILOT_BRANCH_PREFIX", "pilot/"),
         audit_log=Path(os.environ.get("PILOT_AUDIT_LOG", "./audit/decisions.jsonl")),
+        metrics_log=Path(os.environ.get("PILOT_METRICS_LOG", "./audit/runs.jsonl")),
         task=task,
     )
 

@@ -27,6 +27,7 @@ from claude_agent_sdk import (
     query,
 )
 
+from agentos_pilot.metrics import RunMetrics, append_metrics, now
 from agentos_pilot.permissions import make_can_use_tool, make_pre_tool_use_hook
 
 
@@ -40,6 +41,8 @@ class PilotConfig:
     branch_prefix: str
     audit_log: Path
     task: str
+    metrics_log: Path = Path("./audit/runs.jsonl")
+    task_id: str | None = None
 
 
 def _run_git(repo_root: Path, *args: str) -> str:
@@ -134,11 +137,17 @@ async def run_pipeline(config: PilotConfig) -> int:
     # safer posture for something meant to run unattended.
     exit_code = 1
     saw_assistant_error = False
+    assistant_error_text: str | None = None
+    sdk_error_text: str | None = None
+    result: ResultMessage | None = None
+    started_at = now()
+
     try:
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, AssistantMessage):
                 if message.error:
                     saw_assistant_error = True
+                    assistant_error_text = str(message.error)
                     print(f"[pilot] assistant-level error: {message.error}")
                 for block in message.content:
                     if isinstance(block, TextBlock):
@@ -148,6 +157,7 @@ async def run_pipeline(config: PilotConfig) -> int:
                     elif isinstance(block, ToolResultBlock):
                         print(f"[tool result] {block.content}")
             elif isinstance(message, ResultMessage):
+                result = message
                 print(f"\n[pilot] run finished: {message.subtype}")
                 if message.is_error or saw_assistant_error or message.subtype != "success":
                     exit_code = 1
@@ -155,6 +165,32 @@ async def run_pipeline(config: PilotConfig) -> int:
                     exit_code = 0
     except (ProcessError, ResultError) as e:
         print(f"[pilot] SDK/CLI process failure: {e}")
+        sdk_error_text = str(e)
         exit_code = 1
+
+    metrics = RunMetrics(
+        task=config.task,
+        task_id=config.task_id,
+        branch_name=branch_name,
+        started_at=started_at,
+        finished_at=now(),
+        exit_code=exit_code,
+        success=exit_code == 0,
+        duration_ms=result.duration_ms if result else None,
+        duration_api_ms=result.duration_api_ms if result else None,
+        num_turns=result.num_turns if result else None,
+        total_cost_usd=result.total_cost_usd if result else None,
+        usage=result.usage if result else None,
+        model_usage=result.model_usage if result else None,
+        permission_denials=len(result.permission_denials) if result and result.permission_denials else 0,
+        stop_reason=result.stop_reason if result else None,
+        assistant_error=assistant_error_text,
+        sdk_error=sdk_error_text,
+    )
+    append_metrics(config.metrics_log, metrics)
+    print(
+        f"[pilot] metrics -> {config.metrics_log} "
+        f"(cost=${metrics.total_cost_usd or 0:.4f}, turns={metrics.num_turns})"
+    )
 
     return exit_code
