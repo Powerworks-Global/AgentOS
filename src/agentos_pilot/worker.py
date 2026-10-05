@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from agentos_pilot.env import load_dotenv
+from agentos_pilot.notify import TelegramConfig, notify_run_result
 from agentos_pilot.pipeline import PilotConfig, PilotError, run_pipeline
 from agentos_pilot.tasks import TaskStore
 
@@ -42,6 +43,7 @@ async def run_once() -> int:
         print(f"[worker] task {task.id} failed: no repo_root available", file=sys.stderr)
         return 2
 
+    telegram_config = TelegramConfig.from_env()
     config = PilotConfig(
         repo_root=Path(repo_root),
         branch_prefix=os.environ.get("PILOT_BRANCH_PREFIX", "pilot/"),
@@ -49,6 +51,10 @@ async def run_once() -> int:
         metrics_log=Path(os.environ.get("PILOT_METRICS_LOG", "./audit/runs.jsonl")),
         task=task.description,
         task_id=task.id,
+        # None if TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID aren't set - notify_run_result
+        # itself re-resolves from env as a fallback, but resolving once here
+        # avoids a confusing "configured in worker but not in pipeline" gap.
+        notify=(lambda m: notify_run_result(m, telegram_config)) if telegram_config else None,
     )
 
     print(f"[worker] claimed task {task.id}: {task.description!r}")

@@ -32,6 +32,10 @@ def main() -> int:
         print("PILOT_REPO_ROOT is not set (see .env.example)", file=sys.stderr)
         return 2
 
+    # No notify= here deliberately: this entrypoint is a human watching the
+    # terminal by hand. Telegram notification (see worker.py) matters for
+    # the unattended/scheduled path, not this one - wiring it here too
+    # would just be a duplicate ping for someone already watching.
     config = PilotConfig(
         repo_root=Path(repo_root),
         branch_prefix=os.environ.get("PILOT_BRANCH_PREFIX", "pilot/"),

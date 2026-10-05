@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,6 +44,13 @@ class PilotConfig:
     task: str
     metrics_log: Path = Path("./audit/runs.jsonl")
     task_id: str | None = None
+    # Optional post-run notification hook (see notify.py) — left as a plain
+    # callable rather than importing notify.py's Telegram specifics here,
+    # so pipeline.py doesn't need to know or care which notification
+    # channel (if any) the caller wired up. Never awaited/async: the
+    # pipeline's own run is already finished by the time this fires, and a
+    # notification failing shouldn't change the run's outcome either way.
+    notify: Callable[[RunMetrics], None] | None = None
 
 
 def _run_git(repo_root: Path, *args: str) -> str:
@@ -192,5 +200,11 @@ async def run_pipeline(config: PilotConfig) -> int:
         f"[pilot] metrics -> {config.metrics_log} "
         f"(cost=${metrics.total_cost_usd or 0:.4f}, turns={metrics.num_turns})"
     )
+
+    if config.notify is not None:
+        try:
+            config.notify(metrics)
+        except Exception as e:  # noqa: BLE001 - notification must never affect the real exit code
+            print(f"[pilot] notify callback raised (ignored, non-fatal): {e}")
 
     return exit_code

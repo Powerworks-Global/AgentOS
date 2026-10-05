@@ -103,12 +103,25 @@ semantics, tested against a real filesystem with the actual Claude Agent
 SDK call mocked out), and the metrics/report path (`tests/test_metrics.py`,
 `tests/test_report.py`).
 
+## Notifications (Telegram)
+
+Set `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` (see `.env.example`) and
+`worker` posts a post-run summary (success/failure, cost, turns,
+permission-denial count) to that chat after every scheduled run. This is
+the swap-in for the design note's originally-planned Discord
+integration — scoped deliberately narrow: it's a notification, not yet an
+approval flow. A denied tool call is still final for the run; Telegram
+tells a human it happened quickly, it doesn't yet let them approve that
+specific denial and have the run continue. Unset (either var), it's a
+silent no-op — never required, never blocks a run.
+
 ## What this pilot deliberately does not do yet
 
 - Scheduled `worker` runs are drafted (`gcp/systemd/`) but not enabled on
   the live VM — see the Inbox section above.
-- No Discord integration (phase 3 in the design note) — a denied tool call
-  is final for the run, not escalated to a human for approval.
+- Telegram notifies on run outcome (see above) but doesn't yet turn a
+  specific denied call into something a human can approve mid-run — that
+  interactive escalate-and-resume flow is the real remaining phase-3 gap.
 - No multi-profile/service-account separation — single policy, single repo
   per run (though a task can now point at a different repo than
   `PILOT_REPO_ROOT` via `inbox add --repo`).

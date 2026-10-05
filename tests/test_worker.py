@@ -109,3 +109,45 @@ def test_run_once_fails_cleanly_with_no_repo_root_available(inbox, monkeypatch):
 
     assert exit_code == 2
     assert (inbox.failed / f"{task.id}.json").exists()
+
+
+def test_run_once_wires_notify_when_telegram_configured(inbox, monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    inbox.add("add a feature")
+    monkeypatch.setenv("PILOT_REPO_ROOT", str(repo_root))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+
+    captured = {}
+
+    async def fake_run_pipeline(config):
+        captured["notify"] = config.notify
+        return 0
+
+    monkeypatch.setattr(worker, "run_pipeline", fake_run_pipeline)
+
+    _run(worker.run_once())
+
+    assert captured["notify"] is not None
+
+
+def test_run_once_leaves_notify_none_without_telegram_config(inbox, monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    inbox.add("add a feature")
+    monkeypatch.setenv("PILOT_REPO_ROOT", str(repo_root))
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+    captured = {}
+
+    async def fake_run_pipeline(config):
+        captured["notify"] = config.notify
+        return 0
+
+    monkeypatch.setattr(worker, "run_pipeline", fake_run_pipeline)
+
+    _run(worker.run_once())
+
+    assert captured["notify"] is None
