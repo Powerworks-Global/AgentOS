@@ -1,0 +1,79 @@
+"""Gotthard Control Plane Configuration
+
+Default configuration file for the Swiss-grade dependable agent control plane.
+Aligned with ADR-0027, ADR-0028, and the Four-Tier Dispatch Ladder.
+"""
+
+[runtime]
+default_tier = "flash"
+max_task_duration_seconds = 900
+per_run_budget_usd = 0.50
+max_turns_per_run = 30
+worktree_root = "/tmp/gotthard-worktrees"
+
+[bouncer]
+enabled = true
+max_identical_tool_calls = 3
+context_warning_percent = 75
+context_compaction_tier = "flash"
+heartbeat_timeout_seconds = 90
+on_loop_detected = "pause_and_notify"
+
+[context]
+layers = ["system", "pinned_spec", "injected_dynamic", "scratchpad_trace"]
+allow_runtime_injection = true
+max_scratchpad_tokens = 16384
+
+# ---------------------------------------------------------
+# TIER DEFINITIONS
+# ---------------------------------------------------------
+
+[tiers.flash]
+description = "Antigravity CLI / Gemini Flash subscription runner"
+type = "cli_or_api"
+engine = "agy"
+model = "gemini-3.8-flash"
+api_base = "https://generativelanguage.googleapis.com/v1beta"
+api_key_env = "GEMINI_API_KEY"
+temperature = 0.2
+supports_tools = true
+fallback_tier = "ifm"
+
+[tiers.ifm]
+description = "Abu Dhabi Institute of Foundation Models (IFM)"
+type = "openai_compatible"
+api_base = "https://api.ifm.ai/v1"
+model = "IFM/K2-Horizon-375B-A23B"
+api_key_env = "IFM_API_KEY"
+temperature = 0.3
+max_tokens = 8192
+supports_tools = true
+fallback_tier = "grok"
+
+[tiers.grok]
+description = "xAI Grok API (Optional / Candidate)"
+enabled = false
+type = "openai_compatible"
+api_base = "https://api.x.ai/v1"
+model = "grok-beta"
+api_key_env = "XAI_API_KEY"
+temperature = 0.2
+fallback_tier = "frontier"
+
+[tiers.frontier]
+description = "Frontier Anthropic / TensorX fallback"
+type = "anthropic_or_tensorx"
+api_base = "https://api.tensorx.ai/v1"
+model = "claude-3-7-sonnet"
+api_key_env = "TENSORX_API_KEY"
+prompt_caching = true
+temperature = 0.1
+
+# ---------------------------------------------------------
+# TASK CLASSIFICATION RULES
+# ---------------------------------------------------------
+
+[routing_rules]
+"test,lint,format,docs" = "flash"
+"architecture,specification,review,adr" = "ifm"
+"complex_refactor,debug_loop" = "frontier"
