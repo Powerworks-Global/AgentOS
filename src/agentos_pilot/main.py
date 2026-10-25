@@ -15,6 +15,7 @@ import os
 import sys
 from pathlib import Path
 
+from agentos_pilot.config import GotthardConfig
 from agentos_pilot.env import load_dotenv
 from agentos_pilot.pipeline import PilotConfig, PilotError, run_pipeline
 
@@ -32,6 +33,17 @@ def main() -> int:
         print("PILOT_REPO_ROOT is not set (see .env.example)", file=sys.stderr)
         return 2
 
+    # Gotthard tier dispatch (ADR-0027 ladder): load the control-plane
+    # config and resolve which rung this task routes to, before the
+    # pipeline decides whether that rung's runner is actually dispatchable
+    # right now. Resolved again inside run_pipeline() off the same config
+    # path for the real dispatch decision + metrics/audit recording - this
+    # call is so the tier is visible here too, for a human watching.
+    gotthard_config_path = Path(os.environ.get("GOTTHARD_CONFIG_PATH", "gotthard.toml"))
+    gotthard_config = GotthardConfig.from_toml_file(gotthard_config_path)
+    resolved_tier = gotthard_config.resolve_tier_for_task(task)
+    print(f"[pilot] resolved tier for task: {resolved_tier.name} (model={resolved_tier.model})")
+
     # No notify= here deliberately: this entrypoint is a human watching the
     # terminal by hand. Telegram notification (see worker.py) matters for
     # the unattended/scheduled path, not this one - wiring it here too
@@ -41,6 +53,7 @@ def main() -> int:
         branch_prefix=os.environ.get("PILOT_BRANCH_PREFIX", "pilot/"),
         audit_log=Path(os.environ.get("PILOT_AUDIT_LOG", "./audit/decisions.jsonl")),
         metrics_log=Path(os.environ.get("PILOT_METRICS_LOG", "./audit/runs.jsonl")),
+        gotthard_config_path=gotthard_config_path,
         task=task,
     )
 

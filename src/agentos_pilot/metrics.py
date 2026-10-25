@@ -37,6 +37,15 @@ class RunMetrics:
     stop_reason: str | None = None
     assistant_error: str | None = None
     sdk_error: str | None = None
+    # Gotthard tier-dispatch wiring (ADR-0027 ladder / ADR-0028 context):
+    # which rung gotthard.toml's routing_rules resolved this task to, and
+    # whether the run actually executed via that rung's own runner
+    # ("agy_cli" / "openai_compatible") or fell back to the existing
+    # Claude SDK path ("claude_sdk_fallback"), e.g. because the rung's
+    # requirements (binary / api_key_env) weren't satisfiable.
+    resolved_tier: str | None = None
+    resolved_tier_model: str | None = None
+    tier_runner_type: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))

@@ -19,10 +19,15 @@ import os
 import sys
 from pathlib import Path
 
+from agentos_pilot.config import GotthardConfig
 from agentos_pilot.env import load_dotenv
 from agentos_pilot.notify import TelegramConfig, notify_run_result
 from agentos_pilot.pipeline import PilotConfig, PilotError, run_pipeline
 from agentos_pilot.tasks import TaskStore
+
+
+def _gotthard_config_path() -> Path:
+    return Path(os.environ.get("GOTTHARD_CONFIG_PATH", "gotthard.toml"))
 
 
 def _inbox_dir() -> Path:
@@ -43,12 +48,27 @@ async def run_once() -> int:
         print(f"[worker] task {task.id} failed: no repo_root available", file=sys.stderr)
         return 2
 
+    # Gotthard tier dispatch (ADR-0027 ladder): load the control-plane
+    # config and resolve which rung this task's description routes to,
+    # before the pipeline decides whether that rung's runner is actually
+    # dispatchable right now. Resolved again inside run_pipeline() off the
+    # same config path for the real dispatch decision + metrics/audit
+    # recording - this call is so the tier is visible in worker logs too.
+    gotthard_config_path = _gotthard_config_path()
+    gotthard_config = GotthardConfig.from_toml_file(gotthard_config_path)
+    resolved_tier = gotthard_config.resolve_tier_for_task(task.description)
+    print(
+        f"[worker] resolved tier for task {task.id}: {resolved_tier.name} "
+        f"(model={resolved_tier.model})"
+    )
+
     telegram_config = TelegramConfig.from_env()
     config = PilotConfig(
         repo_root=Path(repo_root),
         branch_prefix=os.environ.get("PILOT_BRANCH_PREFIX", "pilot/"),
         audit_log=Path(os.environ.get("PILOT_AUDIT_LOG", "./audit/decisions.jsonl")),
         metrics_log=Path(os.environ.get("PILOT_METRICS_LOG", "./audit/runs.jsonl")),
+        gotthard_config_path=gotthard_config_path,
         task=task.description,
         task_id=task.id,
         # None if TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID aren't set - notify_run_result

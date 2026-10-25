@@ -117,6 +117,44 @@ def _append_audit(audit_log: Path, tool_name: str, tool_input: dict, decision: s
         )
 
 
+def append_tier_dispatch_audit(
+    audit_log: Path,
+    tier_name: str,
+    model: str,
+    runner_type: str,
+    decision: str,
+    reason: str,
+) -> None:
+    """Record a Gotthard tier-dispatch decision in the same audit log used
+    for tool-call allow/deny decisions (see _append_audit above).
+
+    `decision` is one of "dispatch" (tier runner used for this run),
+    "fallback" (runner raised, existing Claude SDK path used instead), or
+    "would-not-run" (tier's requirements weren't satisfiable at all - e.g.
+    missing binary or unset api_key_env - so the run never attempted the
+    runner and went straight to the Claude SDK path). This is additive: it
+    does not touch or replace _append_audit's tool-call record shape, it is
+    a new, distinct record type in the same JSONL file.
+    """
+
+    audit_log.parent.mkdir(parents=True, exist_ok=True)
+    with audit_log.open("a") as f:
+        f.write(
+            json.dumps(
+                {
+                    "ts": time.time(),
+                    "tool": "gotthard.tier_dispatch",
+                    "tier": tier_name,
+                    "model": model,
+                    "runner_type": runner_type,
+                    "decision": decision,
+                    "reason": reason,
+                }
+            )
+            + "\n"
+        )
+
+
 def _decide(repo_root: Path, tool_name: str, tool_input: dict) -> tuple[bool, str]:
     """Core allow/deny decision, independent of which SDK hook calls it.
 

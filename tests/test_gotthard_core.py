@@ -50,6 +50,24 @@ def test_toml_loader(tmp_path: Path):
     assert config.tiers["ifm"].api_key_env == "MY_IFM_KEY"
 
 
+def test_loads_real_gotthard_toml_from_repo_root():
+    """gotthard.toml's header is a Python-docstring-shaped comment block,
+    not valid TOML `#` comment syntax - from_toml_file must tolerate that
+    (see config._strip_leading_docstring) since this file is the actual
+    source of truth and must never be edited to work around the loader.
+    """
+    repo_root_toml = Path(__file__).resolve().parent.parent / "gotthard.toml"
+    config = GotthardConfig.from_toml_file(repo_root_toml)
+
+    assert config.runtime.default_tier == "flash"
+    assert config.tiers["ifm"].model == "IFM/K2-Horizon-375B-A23B"
+    assert config.tiers["ifm"].api_key_env == "IFM_API_KEY"
+    assert config.tiers["grok"].enabled is False
+
+    tier = config.resolve_tier_for_task("please add tests and lint this module")
+    assert tier.name == "flash"
+
+
 def test_argos_bouncer_cycle_detection():
     bouncer = ArgosBouncer(max_identical_tool_calls=3)
 

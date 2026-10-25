@@ -28,8 +28,14 @@ from claude_agent_sdk import (
     query,
 )
 
+from agentos_pilot.config import GotthardConfig
 from agentos_pilot.metrics import RunMetrics, append_metrics, now
-from agentos_pilot.permissions import make_can_use_tool, make_pre_tool_use_hook
+from agentos_pilot.permissions import (
+    append_tier_dispatch_audit,
+    make_can_use_tool,
+    make_pre_tool_use_hook,
+)
+from agentos_pilot.runner import RunnerError, build_runner_for_tier, runner_requirements_met
 
 
 class PilotError(RuntimeError):
@@ -44,6 +50,11 @@ class PilotConfig:
     task: str
     metrics_log: Path = Path("./audit/runs.jsonl")
     task_id: str | None = None
+    # Gotthard control-plane config (ADR-0027 tier ladder / ADR-0028
+    # context+bouncer), read from the *gotthard repo's* root as the source
+    # of truth - not config.repo_root, which is the target repo this pilot
+    # run operates on and may be a different repo entirely.
+    gotthard_config_path: Path = Path("gotthard.toml")
     # Optional post-run notification hook (see notify.py) — left as a plain
     # callable rather than importing notify.py's Telegram specifics here,
     # so pipeline.py doesn't need to know or care which notification
@@ -104,6 +115,80 @@ async def run_pipeline(config: PilotConfig) -> int:
 
     branch_name = f"{config.branch_prefix}{int(asyncio.get_event_loop().time())}"
     prompt = _build_prompt(config.task, branch_name)
+
+    # Gotthard tier dispatch (ADR-0027 ladder / ADR-0028 context+bouncer):
+    # resolve which rung gotthard.toml's routing_rules (specific rules
+    # before default_tier) says this task belongs on, and whether that
+    # rung's own runner can actually run right now (binary present for
+    # cli_or_api/agy, api_key_env set for openai_compatible). If so, this
+    # run is dispatched through that runner instead of the plain
+    # claude-CLI query loop below. If not - or if the runner raises - we
+    # log why and fall back to the existing Claude SDK path; an
+    # unprovisioned rung must never fail the task.
+    gotthard_config = GotthardConfig.from_toml_file(config.gotthard_config_path)
+    resolved_tier = gotthard_config.resolve_tier_for_task(config.task)
+    tier_runner, tier_runner_type = build_runner_for_tier(resolved_tier)
+    requirements_met, requirement_reason = runner_requirements_met(resolved_tier, tier_runner)
+
+    print(
+        f"[pilot] resolved tier: {resolved_tier.name} "
+        f"(model={resolved_tier.model}, runner={tier_runner_type})"
+    )
+
+    used_tier_runner = False
+    tier_runner_output: str | None = None
+
+    if requirements_met and tier_runner is not None:
+        append_tier_dispatch_audit(
+            config.audit_log, resolved_tier.name, resolved_tier.model,
+            tier_runner_type, "dispatch", requirement_reason,
+        )
+        print(f"[pilot] dispatching run to tier '{resolved_tier.name}' via {tier_runner_type}")
+        try:
+            tier_runner_output = tier_runner.run(resolved_tier.model, prompt)
+            used_tier_runner = True
+        except RunnerError as e:
+            print(f"[pilot] tier runner raised ({e}); falling back to Claude SDK path")
+            append_tier_dispatch_audit(
+                config.audit_log, resolved_tier.name, resolved_tier.model,
+                tier_runner_type, "fallback", f"runner raised: {e}",
+            )
+    else:
+        print(
+            f"[pilot] WOULD-NOT-RUN tier '{resolved_tier.name}' via {tier_runner_type}: "
+            f"{requirement_reason} - falling back to Claude SDK path"
+        )
+        append_tier_dispatch_audit(
+            config.audit_log, resolved_tier.name, resolved_tier.model,
+            tier_runner_type, "would-not-run", requirement_reason,
+        )
+
+    started_at = now()
+
+    if used_tier_runner:
+        print(tier_runner_output)
+        metrics = RunMetrics(
+            task=config.task,
+            task_id=config.task_id,
+            branch_name=branch_name,
+            started_at=started_at,
+            finished_at=now(),
+            exit_code=0,
+            success=True,
+            resolved_tier=resolved_tier.name,
+            resolved_tier_model=resolved_tier.model,
+            tier_runner_type=tier_runner_type,
+        )
+        append_metrics(config.metrics_log, metrics)
+        print(f"[pilot] metrics -> {config.metrics_log} (tier={resolved_tier.name}, runner={tier_runner_type})")
+
+        if config.notify is not None:
+            try:
+                config.notify(metrics)
+            except Exception as e:  # noqa: BLE001 - notification must never affect the real exit code
+                print(f"[pilot] notify callback raised (ignored, non-fatal): {e}")
+
+        return 0
 
     # Deliberately no `allowed_tools` here: naming a tool there auto-approves every
     # call to it before can_use_tool is ever consulted (the SDK warns about this
@@ -194,6 +279,9 @@ async def run_pipeline(config: PilotConfig) -> int:
         stop_reason=result.stop_reason if result else None,
         assistant_error=assistant_error_text,
         sdk_error=sdk_error_text,
+        resolved_tier=resolved_tier.name,
+        resolved_tier_model=resolved_tier.model,
+        tier_runner_type="claude_sdk_fallback",
     )
     append_metrics(config.metrics_log, metrics)
     print(
