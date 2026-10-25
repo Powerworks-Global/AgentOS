@@ -6,10 +6,22 @@ Loads gotthard.toml (or agentos.toml) and resolves secrets from environment vari
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# gotthard.toml's header is written as a Python-style module docstring
+# (`"""Gotthard Control Plane Configuration ... """`) rather than TOML's
+# `#` comment syntax - which tomllib rejects outright as invalid TOML. The
+# file is still the source of truth (nothing here edits it), so the loader
+# tolerates exactly that one leading docstring-shaped block before parsing.
+_LEADING_DOCSTRING_RE = re.compile(r'\A\s*"""[\s\S]*?"""[ \t]*\n', re.MULTILINE)
+
+
+def _strip_leading_docstring(text: str) -> str:
+    return _LEADING_DOCSTRING_RE.sub("", text, count=1)
 
 
 @dataclass
@@ -130,8 +142,8 @@ class GotthardConfig:
     def from_toml_file(cls, path: Path) -> GotthardConfig:
         if not path.exists():
             return cls.default()
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
+        text = path.read_text(encoding="utf-8")
+        data = tomllib.loads(_strip_leading_docstring(text))
 
         runtime_data = data.get("runtime", {})
         runtime = RuntimeConfig(
